@@ -1,0 +1,50 @@
+spring:
+  profiles:
+    active: dev
+  application:
+    name: city-short-url
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+
+# 项目 A 占 8080（后端）/ 8081（前端），本项目用 8082
+server:
+  port: 8082
+  servlet:
+    context-path: /
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    default-fetch-size: 100
+  global-config:
+    banner: false
+    db-config:
+      # 主键策略：由雪花算法生成（Step 2 实现）。
+      # 注意 MyBatis-Plus 只在实体 id 为空时才生成，手动 set 过的不覆盖，
+      # 所以 short_url 用自己的雪花 ID、access_log 用自增 ID 可以共存。
+      id-type: ASSIGN_ID
+  mapper-locations: classpath:mapper/*.xml
+
+# ===== 接口文档（Knife4j / OpenAPI3）=====
+# 访问 http://localhost:8082/doc.html
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+
+logging:
+  level:
+    com.cityshorturl: debug
+    org.springframework.web: info
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

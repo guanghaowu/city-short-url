@@ -1,0 +1,75 @@
+# Compose 规范已废弃顶层 version 字段（写了会告警），故不声明。
+#
+# 端口规划：项目 A 已占 8080/8081/3307/6379，本项目整体避开
+#   MySQL  3308 → 容器 3306
+#   Redis  6380 → 容器 6379
+#   应用   8082 → 容器 8080
+#
+# 注：RocketMQ 不在本文件里 —— Step 7 接入时再决定是复用项目 A 的集群
+#     还是另起一套（避免 9876 端口冲突）。
+
+services:
+  # ========== MySQL ==========
+  mysql:
+    image: mysql:8.0
+    container_name: city-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: city_url
+      TZ: Asia/Shanghai
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command:
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========== Redis ==========
+  redis:
+    image: redis:7-alpine
+    container_name: city-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========== 应用本体 ==========
+  city-url-app:
+    build: .
+    image: city-url-app:latest
+    container_name: city-url-app
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  mysql_data:
+  redis_data:

@@ -1,0 +1,32 @@
+# 容器 profile：走 docker-compose 服务名
+#
+# ⚠ 容器内端口必须固定 8080（与 Dockerfile EXPOSE 及 compose 的 8082:8080 对应）。
+# 主 application.yml 里的 8082 是给本地 dev 直连用的，这里必须覆盖，
+# 否则容器内也起 8082，宿主 8082 就映射到了容器 8080 —— 端口对不上，访问必然失败。
+server:
+  port: 8080
+
+spring:
+  datasource:
+    type: com.alibaba.druid.pool.DruidDataSource
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://city-mysql:3306/city_url?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true
+    username: root
+    password: 123456
+    druid:
+      initial-size: 5
+      min-idle: 5
+      max-active: 20
+      max-wait: 60000
+      validation-query: SELECT 1
+      test-while-idle: true
+      test-on-borrow: false
+      test-on-return: false
+
+  data:
+    redis:
+      host: city-redis
+      port: 6379
+      database: 0
+      password:
+      timeout: 5000ms

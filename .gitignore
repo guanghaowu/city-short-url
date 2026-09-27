@@ -1,0 +1,65 @@
+# ===== Maven =====
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+
+# Maven Wrapper 必须提交：本机未装 Maven，且面试官 clone 后要能直接 ./mvnw 跑起来。
+# 只忽略 wrapper 下载的临时 jar（新版 wrapper 是纯下载模式，目录里只有 properties）。
+.mvn/wrapper/maven-wrapper.jar
+
+# ===== IDE =====
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ===== Logs =====
+logs/
+*.log
+log/
+spring.log
+sql.log
+
+# ===== Runtime =====
+HELP.md
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+
+# ===== Secrets（务必忽略）=====
+.env
+.env.local
+application-local.yml
+application-prod.yml
+src/main/resources/application-*.yml
+!src/main/resources/application-dev.yml
+!src/main/resources/application-docker.yml
+
+# ===== Docker =====
+.docker/
+
+# ===== Build =====
+out/
+build/
+dist/

@@ -21,6 +21,7 @@
         <!-- Java 21（LTS）。与项目 A 保持一致，本机 JDK 与容器镜像版本统一。 -->
         <java.version>21</java.version>
         <mybatis-plus.version>3.5.9</mybatis-plus.version>
+        <jjwt.version>0.12.5</jjwt.version>
     </properties>
 
     <dependencies>
@@ -63,6 +64,34 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!-- JWT：0.12.x 起 API 改名（parserBuilder -> parser、setSubject -> subject）。
+             impl / jackson 只需 runtime 作用域。 -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- BCrypt 密码哈希。只引 crypto 模块，不引 spring-boot-starter-security
+             —— 后者会带上整套过滤器链，而本项目用自定义 JwtInterceptor 做鉴权，
+             引进来反而要额外排除自动配置。 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
         </dependency>
 
         <!-- 接口文档：Knife4j（访问 /doc.html） -->

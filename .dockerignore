@@ -1,0 +1,28 @@
+# 构建上下文排除清单。
+# 作用有二：① 减小发给 Docker daemon 的上下文体积（target/ 动辄几十 MB）；
+#          ② 避免无关文件变化影响 COPY 层的缓存判定。
+
+target/
+.git/
+.gitignore
+.dockerignore
+
+# 文档与脚本：容器里不需要
+*.md
+docs/
+bench/
+*.sh
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Maven Wrapper（构建阶段用的是镜像内的 mvn，不需要 wrapper）
+mvnw
+mvnw.cmd
+.mvn/
+
+# 本地日志
+*.log
+logs/

@@ -36,3 +36,6 @@ app:
     # 注意 JJWT 0.12 要求密钥 >= 32 字节，太短启动即报错。
     secret: ${JWT_SECRET:city-short-url-dev-secret-key-change-me-2026-at-least-32-bytes}
     expire-hours: 24
+  short-url:
+    # 拼接给前端展示的完整短链。上生产要换成真实域名（或 CDN 域名）
+    base-url: http://localhost:8082

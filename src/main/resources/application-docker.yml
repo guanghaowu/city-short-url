@@ -35,3 +35,6 @@ app:
   jwt:
     secret: ${JWT_SECRET:city-short-url-dev-secret-key-change-me-2026-at-least-32-bytes}
     expire-hours: 24
+  short-url:
+    # 对外访问地址用的是宿主端口（容器内是 8080，映射到宿主 8082）
+    base-url: ${SHORT_URL_BASE_URL:http://localhost:8082}

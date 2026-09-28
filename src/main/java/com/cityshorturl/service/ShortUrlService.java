@@ -2,9 +2,14 @@ package com.cityshorturl.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.cityshorturl.common.BusinessException;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.cityshorturl.dto.CreateShortUrlDTO;
+import com.cityshorturl.dto.PageVO;
+import com.cityshorturl.dto.ShortUrlDetailVO;
 import com.cityshorturl.dto.ShortUrlVO;
+import com.cityshorturl.dto.StatsVO;
 import com.cityshorturl.entity.ShortUrl;
+import com.cityshorturl.mapper.AccessLogMapper;
 import com.cityshorturl.mapper.ShortUrlMapper;
 import com.cityshorturl.util.Base62;
 import com.cityshorturl.util.SnowflakeIdGenerator;
@@ -15,10 +20,16 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 
 @Slf4j
@@ -53,6 +64,7 @@ public class ShortUrlService {
 
     private final SnowflakeIdGenerator idGenerator;
     private final ShortUrlMapper shortUrlMapper;
+    private final AccessLogMapper accessLogMapper;
     private final BloomFilterService bloomFilterService;
     private final StringRedisTemplate stringRedisTemplate;
 
@@ -170,6 +182,85 @@ public class ShortUrlService {
         return loadWithMutex(shortCode, cacheKey);
     }
 
+    // ------------------------------------------------------------------ 管理接口（Step 6）
+
+    /**
+     * 短链详情。<b>必须校验归属</b> —— 否则任何人拿到 shortCode 就能看到别人的原始链接。
+     */
+    public ShortUrlDetailVO detail(String shortCode, Long userId) {
+        return toDetail(requireOwned(shortCode, userId));
+    }
+
+    /** 我的短链（分页）。按 userId 过滤是越权防护的第一道闸。 */
+    public PageVO<ShortUrlDetailVO> myList(Long userId, long current, long size) {
+        Page<ShortUrl> page = new Page<>(current, size);
+        LambdaQueryWrapper<ShortUrl> wrapper = new LambdaQueryWrapper<ShortUrl>()
+                // 只列有效短链；软删的（status=2）直接不出现在列表里
+                .eq(ShortUrl::getUserId, userId)
+                .eq(ShortUrl::getStatus, 1)
+                .orderByDesc(ShortUrl::getCreatedAt);
+        return PageVO.of(shortUrlMapper.selectPage(page, wrapper), this::toDetail);
+    }
+
+    /**
+     * 删除短链（软删）。
+     *
+     * <h3>🔴 软删必须同时删缓存</h3>
+     * 只把 DB 里的 {@code status} 改成 2，而 Redis 里
+     * {@code short:url:{code}} 的映射还在 → <b>短链照样能跳转</b>，
+     * 删除形同虚设。这是「写侧必须失效缓存」的经典场景。
+     *
+     * <h3>为什么布隆过滤器不用（也不能）删</h3>
+     * Guava 的 {@code BloomFilter} <b>不支持删除</b>（不像 Counting Bloom Filter）。
+     * 已删的短码会一直留在布隆里，于是请求会穿透到 DB，
+     * 由 {@code status != 1} 的判断返回 404 —— 正确性没问题，只是多一次 DB 查询。
+     * 这也是选 RedisBloom 的一个理由（它支持删），但代价是每请求多一次网络往返。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void delete(String shortCode, Long userId) {
+        ShortUrl entity = requireOwned(shortCode, userId);
+
+        ShortUrl update = new ShortUrl();
+        update.setId(entity.getId());
+        update.setStatus(2);
+        shortUrlMapper.updateById(update);
+
+        // 关键一步：不删缓存，删除就不生效
+        stringRedisTemplate.delete(CACHE_KEY_PREFIX + shortCode);
+        // 空值标记也要清掉：它现在应该变成「确实不存在」，
+        // 留着也没错（60s 后自动过期），但清掉能让语义更干净
+        stringRedisTemplate.delete(MISS_KEY_PREFIX + shortCode);
+
+        log.info("短链已删除: userId={}, shortCode={}", userId, shortCode);
+    }
+
+    /** 访问统计：全量 PV/UV + 按天明细。同样要校验归属。 */
+    public StatsVO stats(String shortCode, Long userId, int days) {
+        requireOwned(shortCode, userId);
+
+        Map<String, Object> total = accessLogMapper.selectTotal(shortCode);
+        long totalPv = toLong(total == null ? null : total.get("pv"));
+        long totalUv = toLong(total == null ? null : total.get("uv"));
+
+        LocalDateTime since = LocalDate.now().minusDays(days - 1L).atStartOfDay();
+        List<StatsVO.DailyStat> daily = new ArrayList<>();
+        for (AccessLogMapper.DailyStatRow row : accessLogMapper.selectDailyStats(shortCode, since)) {
+            daily.add(StatsVO.DailyStat.builder()
+                    .date(String.valueOf(row.getStatDate()))
+                    .pv(toLong(row.getPv()))
+                    .uv(toLong(row.getUv()))
+                    .build());
+        }
+
+        return StatsVO.builder()
+                .shortCode(shortCode)
+                .days(days)
+                .totalPv(totalPv)
+                .totalUv(totalUv)
+                .daily(daily)
+                .build();
+    }
+
     // ------------------------------------------------------------------ 内部实现
 
     /**
@@ -282,6 +373,56 @@ public class ShortUrlService {
             // 其他线程退化成「各自查库」，正确性不受影响
             log.warn("释放互斥锁失败（将由 TTL 自动过期）: {}", lockKey, e);
         }
+    }
+
+    /**
+     * 取短链并校验归属。<b>所有管理类接口的共同入口</b> —— 集中一处，
+     * 避免「某个新接口忘了加 user_id 过滤」这类越权漏洞。
+     *
+     * <h3>为什么越权返回 403 而不是 404</h3>
+     * 严格来说 403 会<b>确认「这个短码存在」</b>（404 则不泄露存在性），
+     * 对不可枚举的资源 ID 应该统一返回 404。
+     * 但本项目短码是公开的：任何人都能通过跳转接口
+     * （{@code GET /{shortCode}}）枚举出哪些码存在 —— 存在性本来就藏不住，
+     * 所以 403 没有额外泄露，换来更清晰的语义。
+     * <b>换成不可枚举的资源 ID 时，这个结论要重新评估。</b>
+     */
+    private ShortUrl requireOwned(String shortCode, Long userId) {
+        ShortUrl entity = shortUrlMapper.selectOne(
+                new LambdaQueryWrapper<ShortUrl>().eq(ShortUrl::getShortCode, shortCode));
+        if (entity == null || !Integer.valueOf(1).equals(entity.getStatus())) {
+            throw notFound("短链不存在");
+        }
+        if (!Objects.equals(entity.getUserId(), userId)) {
+            log.warn("越权访问被拦截: shortCode={}, 请求者={}, 归属者={}",
+                    shortCode, userId, entity.getUserId());
+            throw new BusinessException(403, "无权访问该短链");
+        }
+        return entity;
+    }
+
+    private ShortUrlDetailVO toDetail(ShortUrl entity) {
+        String code = entity.getShortCode();
+        return ShortUrlDetailVO.builder()
+                .shortCode(code)
+                .shortUrl(baseUrl + "/" + code)
+                .originalUrl(entity.getOriginalUrl())
+                .expireAt(entity.getExpireAt())
+                .status(entity.getStatus())
+                .pv(entity.getPv())
+                .uv(entity.getUv())
+                .createdAt(entity.getCreatedAt())
+                .build();
+    }
+
+    private static long toLong(Object v) {
+        if (v == null) {
+            return 0L;
+        }
+        if (v instanceof Number n) {
+            return n.longValue();
+        }
+        return Long.parseLong(String.valueOf(v));
     }
 
     private void sleepQuietly(long ms) {

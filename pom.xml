@@ -94,6 +94,13 @@
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
 
+        <!-- AOP：Step 5 的限流注解（@RateLimit）靠它织入。
+             注意 spring-boot-starter-web 不传递依赖这个。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
         <!-- Guava：只用它的 BloomFilter。
              选 Guava 本地布隆而非 RedisBloom 的理由与代价见 BloomFilterService 类注释。 -->
         <dependency>

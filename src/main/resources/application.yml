@@ -28,6 +28,11 @@ mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
 
 app:
+  rate-limit:
+    # 全局开关。压测要播种 2000 条短链时会撞上限流，用
+    # APP_RATELIMIT_ENABLED=false 临时关掉（见 bench/run-bench.sh）。
+    enabled: ${APP_RATELIMIT_ENABLED:true}
+
   bloom:
     # 总开关。压测时用 APP_BLOOM_ENABLED=false 起一份「无布隆」的对照实例，
     # 用来量化「布隆到底省掉了多少次 DB 查询」——没有对照组的性能数字不可信。

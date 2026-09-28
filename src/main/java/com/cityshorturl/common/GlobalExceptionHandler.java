@@ -1,6 +1,8 @@
 package com.cityshorturl.common;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -21,6 +23,24 @@ public class GlobalExceptionHandler {
     public Result<Void> handleBusiness(BusinessException e) {
         log.warn("业务异常: code={}, msg={}", e.getCode(), e.getMessage());
         return Result.fail(e.getCode(), e.getMessage());
+    }
+
+    /**
+     * 限流：返回<b>真正的 HTTP 429</b>，而不是项目统一的「HTTP 200 + 业务码」。
+     *
+     * <p>为什么这里要破例（Step 5 的设计决策）：
+     * 429 是<b>协议语义</b>而非业务失败 —— 网关、CDN、浏览器、HTTP 客户端库都认它，
+     * 配合 {@code Retry-After} 还能自动退避。
+     * 若包成 HTTP 200，调用方无法区分「我该稍后重试」和「我参数传错了」。
+     *
+     * <p>响应体仍复用统一的 {@code Result}（业务码也是 429），
+     * 所以前端按业务码判断的老逻辑不会坏。
+     */
+    @ExceptionHandler(RateLimitException.class)
+    public ResponseEntity<Result<Void>> handleRateLimit(RateLimitException e) {
+        log.warn("限流拦截: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(Result.fail(429, e.getMessage()));
     }
 
     /** @Valid 校验失败：取第一条错误信息返回，避免前端拿到一长串 */

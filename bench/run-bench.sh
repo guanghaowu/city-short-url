@@ -132,7 +132,8 @@ restart_app() {
   fi
 
   # 自证二：当前生效的开关是什么
-  info "features: bloomFilter=$(feature bloomFilter) cacheMutex=$(feature cacheMutex) nullCache=$(feature nullCache)"
+  info "features: bloomFilter=$(feature bloomFilter) cacheMutex=$(feature cacheMutex) " \
+       "nullCache=$(feature nullCache) rateLimit=$(feature rateLimit)"
 }
 
 # ---------------------------------------------------------------- 跑一个用例
@@ -181,18 +182,29 @@ run_case() {   # run_case <编号> <说明> <开关状态> -- <bench.mjs 参数.
 phase_build() {
   log "构建镜像（改了 Java 代码，必须重建，否则跑的是旧 jar）"
   ( cd "$PROJ" && docker compose build city-url-app ) || die "构建失败"
-  restart_app "默认配置" APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=true
+  restart_app "默认配置" APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=true APP_RATELIMIT_ENABLED=true
   wait_feature bloomFilter ON || die "布隆过滤器没有进入 ON 状态（可能还在 LOADING）"
   info "布隆已就绪，可以开始压测"
 }
 
 phase_seed() {
   log "播种：并发创建 $SEED_COUNT 条短链"
+  # Step 5 起「创建短链」按 IP 限 60 次/分钟，播种 2000 条会撞上 → 先临时关掉
+  restart_app "限流 OFF（播种用）" \
+    APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=true APP_RATELIMIT_ENABLED=false
+  wait_feature bloomFilter ON || die "布隆没有就绪"
+  wait_feature rateLimit OFF || die "限流没有被关掉，播种会失败"
+
   local json
   json=$("$NODE_BIN" "$HERE/bench.mjs" --mode seed --base "$BASE_URL" \
          --count "$SEED_COUNT" --out "$CODES" --concurrency 30)
   echo "$json"
   info "短码已写入 $CODES（$(wc -l < "$CODES" | tr -d ' ') 条）"
+
+  # 播种完毕，恢复正常配置再压测
+  restart_app "恢复默认" \
+    APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=true APP_RATELIMIT_ENABLED=true
+  wait_feature bloomFilter ON || die "布隆没有就绪"
 }
 
 phase_main() {
@@ -230,7 +242,7 @@ phase_main() {
 
 phase_nobloom() {
   log "S4 穿透对照组：关掉布隆，跑同样的流量"
-  restart_app "布隆 OFF（压测对照）" APP_BLOOM_ENABLED=false APP_CACHE_MUTEX_ENABLED=true
+  restart_app "布隆 OFF（压测对照）" APP_BLOOM_ENABLED=false APP_CACHE_MUTEX_ENABLED=true APP_RATELIMIT_ENABLED=true
   wait_feature bloomFilter OFF || die "布隆没有被关掉，对照不成立"
   warn "⚠ 对照组成立：bloomFilter=OFF"
 
@@ -241,7 +253,7 @@ phase_nobloom() {
 
 phase_nomutex() {
   log "S6 击穿对照组：布隆恢复 ON、关掉互斥锁，跑同样的并发"
-  restart_app "互斥锁 OFF（压测对照）" APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=false
+  restart_app "互斥锁 OFF（压测对照）" APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=false APP_RATELIMIT_ENABLED=true
   wait_feature bloomFilter ON || die "布隆没有回到 ON"
   wait_feature cacheMutex OFF || die "互斥锁没有被关掉，对照不成立"
   warn "⚠ 对照组成立：cacheMutex=OFF"
@@ -257,7 +269,7 @@ phase_nomutex() {
 
 phase_restore() {
   log "恢复默认配置（布隆 ON + 互斥锁 ON）"
-  restart_app "恢复默认" APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=true
+  restart_app "恢复默认" APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=true APP_RATELIMIT_ENABLED=true
   wait_feature bloomFilter ON || die "布隆没有回到 ON"
 }
 
@@ -340,7 +352,8 @@ $(printf '%s\n' "${CALIB[@]}")
 
 ## 四、结论
 
-（由脚本填入，见下方「人工结论」段）
+本文件是**脚本自动生成的原始数据**，重新跑 `run-bench.sh` 会被覆盖。
+人工分析、面试追问预案与简历写法见 **`docs/项目B-压测报告.md`**。
 
 EOF
 

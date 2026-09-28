@@ -42,6 +42,9 @@ public class HealthController {
     @Value("${app.cache.mutex-enabled:true}")
     private boolean mutexEnabled;
 
+    @Value("${app.rate-limit.enabled:true}")
+    private boolean rateLimitEnabled;
+
     @GetMapping("/api/health")
     public Result<Map<String, Object>> health() {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -78,6 +81,7 @@ public class HealthController {
                 : (bloomFilterService.isReady() ? "ON" : "LOADING"));
         f.put("cacheMutex", mutexEnabled ? "ON" : "OFF");
         f.put("nullCache", nullTtlSeconds > 0 ? "ON" : "OFF");
+        f.put("rateLimit", rateLimitEnabled ? "ON" : "OFF");
         f.put("ttlJitterSeconds", ttlJitterSeconds);
         return f;
     }

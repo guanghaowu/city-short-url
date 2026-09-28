@@ -64,6 +64,8 @@ services:
       # compose 会因配置变化自动重建容器。默认值 true，不影响正常启动。
       APP_BLOOM_ENABLED: ${APP_BLOOM_ENABLED:-true}
       APP_CACHE_MUTEX_ENABLED: ${APP_CACHE_MUTEX_ENABLED:-true}
+      # 压测播种 2000 条短链时会撞上「60 次/分钟/IP」的限流，需要临时关掉
+      APP_RATELIMIT_ENABLED: ${APP_RATELIMIT_ENABLED:-true}
     depends_on:
       mysql:
         condition: service_healthy

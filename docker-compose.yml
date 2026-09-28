@@ -58,6 +58,12 @@ services:
       - "8082:8080"
     environment:
       SPRING_PROFILES_ACTIVE: docker
+      # ===== 压测对照开关 =====
+      # 需要「关掉布隆 / 关掉互斥锁」的基线组时，在宿主执行：
+      #   APP_BLOOM_ENABLED=false docker compose up -d city-url-app
+      # compose 会因配置变化自动重建容器。默认值 true，不影响正常启动。
+      APP_BLOOM_ENABLED: ${APP_BLOOM_ENABLED:-true}
+      APP_CACHE_MUTEX_ENABLED: ${APP_CACHE_MUTEX_ENABLED:-true}
     depends_on:
       mysql:
         condition: service_healthy

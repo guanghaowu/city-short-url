@@ -47,6 +47,16 @@ public class BloomFilterService {
 
     private final ShortUrlMapper shortUrlMapper;
 
+    /**
+     * 总开关。关掉后 {@link #mightContain} 恒返回 true（退化成「没有布隆」）。
+     *
+     * <p>存在的意义是<b>做对照实验</b>：要证明「布隆省掉了多少次 DB 查询」，
+     * 必须有一个关掉布隆的基线。没有对照组的性能数字，面试官一句
+     * 「你怎么知道是布隆起的作用」就答不上来。
+     */
+    @Value("${app.bloom.enabled:true}")
+    private boolean enabled;
+
     /** 预估元素数量。设置过小会导致误判率急剧上升（布隆一旦「满」了就没法扩容） */
     @Value("${app.bloom.expected-insertions:100000}")
     private int expectedInsertions;
@@ -62,6 +72,14 @@ public class BloomFilterService {
 
     @PostConstruct
     public void init() {
+        if (!enabled) {
+            log.warn("布隆过滤器已被 app.bloom.enabled=false 关闭 —— 仅用于压测对照，不要在生产这么跑");
+            ready.set(true);
+            filter = BloomFilter.create(
+                    Funnels.stringFunnel(Charsets.UTF_8), expectedInsertions, fpp);
+            return;
+        }
+
         filter = BloomFilter.create(
                 Funnels.stringFunnel(Charsets.UTF_8), expectedInsertions, fpp);
 
@@ -91,6 +109,10 @@ public class BloomFilterService {
      * @return false = 一定不存在（可安全拦截）；true = 可能存在（需继续查 Redis/DB）
      */
     public boolean mightContain(String shortCode) {
+        if (!enabled) {
+            // 压测对照模式：恒放行，等价于「没有布隆」
+            return true;
+        }
         if (!ready.get()) {
             // 未就绪时保守放行，避免误杀真实短链
             return true;
@@ -106,5 +128,10 @@ public class BloomFilterService {
     /** 供健康检查/排查用 */
     public boolean isReady() {
         return ready.get();
+    }
+
+    /** 供健康检查/压测脚本自证「当前实例到底开没开布隆」 */
+    public boolean isEnabled() {
+        return enabled;
     }
 }

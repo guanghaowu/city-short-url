@@ -8,7 +8,7 @@
 # 判据（每条都必须 PASS）：
 #   1. 短码为 10 位（雪花 ID 量级决定，不是 PRD 里写的 6-8 位）
 #   2. GET /{shortCode} 返回 302，Location 等于原始 URL
-#   3. 非法短码返回业务码 404（HTTP 仍是 200，业务错误模型）
+#   3. 非法短码返回真正的 HTTP 404（Step 4 起短链路径不再沿用「200 + 业务码」模型）
 #   4. 首次解析后 Redis 里存在 short:url:{code}，TTL ≈ 24h
 #   5. 二次请求仍是 302（走缓存，不再查库）
 #   6. GET /doc.html 返回 200 —— 短码路径正则没有把静态资源吞掉
@@ -103,10 +103,11 @@ STATUS2=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/$CODE")
 if [ "$STATUS2" = "302" ]; then ok "二次请求仍 302（命中缓存）"; else bad "二次请求 HTTP $STATUS2"; fi
 
 # ---------------------------------------------------------------- 6. 非法短码
-head1 "6. 非法短码返回业务码 404"
-BAD=$(curl -s "$BASE_URL/zzzzzzzzzz")
-BAD_CODE=$(echo "$BAD" | jget code)
-if [ "$BAD_CODE" = "404" ]; then ok "非法短码 → code=404"; else bad "非法短码返回 $BAD"; fi
+head1 "6. 非法短码返回真正的 HTTP 404"
+# Step 4 起，短链路径不再沿用「HTTP 200 + 业务码」模型：
+# 短链的客户端是浏览器，返回 HTTP 200 + JSON 会让用户看到一坨裸 JSON。
+BAD_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/zzzzzzzzzz")
+if [ "$BAD_STATUS" = "404" ]; then ok "非法短码 → HTTP 404"; else bad "非法短码 → HTTP $BAD_STATUS（期望 404）"; fi
 
 # ---------------------------------------------------------------- 7. 静态资源未被吞
 head1 "7. /doc.html 未被短码路由吞掉"

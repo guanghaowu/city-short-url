@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CityShortUrl · 高并发短链系统</title>
+<!--
+  单文件演示页面，零构建、零外部依赖（不引任何 CDN，离线可用）。
+  由 Spring Boot 从 classpath:/static/index.html 直接托管在 http://localhost:8082/
+
+  为什么不做 Vue3 工程：后端岗的前端贡献约等于 0，它的作用只是「能演示、能截图」。
+  一个单文件页面 + 原生 fetch 就够，省掉一整套构建链。
+-->
+<style>
+  :root{
+    --bg:#f5f6f8; --panel:#fff; --line:#e5e7eb; --text:#1f2328; --muted:#6b7280;
+    --accent:#2f6fed; --accent-weak:#eaf1fe; --ok:#12a150; --warn:#d97706; --err:#dc2626;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  }
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 20px 64px}
+
+  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+  h1{font-size:20px;margin:0;letter-spacing:.3px}
+  h1 span{color:var(--muted);font-weight:400;font-size:14px;margin-left:6px}
+  .spacer{flex:1}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+        padding:18px;margin-top:16px}
+  .card > h2{font-size:15px;margin:0 0 14px;display:flex;align-items:center;gap:8px}
+  .card > h2 .num{display:inline-flex;width:20px;height:20px;border-radius:50%;
+        background:var(--accent-weak);color:var(--accent);font-size:12px;
+        align-items:center;justify-content:center;font-weight:600}
+
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+  input,select{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;
+        font:inherit;background:#fff;color:inherit;outline:none}
+  input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+  .row > .grow{flex:1;min-width:220px}
+  .row > .w120{width:120px}
+
+  button{padding:9px 16px;border:1px solid var(--line);background:#fff;color:var(--text);
+        border-radius:8px;font:inherit;cursor:pointer;white-space:nowrap;transition:.15s}
+  button:hover{border-color:#cbd5e1;background:#fafbfc}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover{background:#2861d8}
+  button.mini{padding:4px 10px;font-size:12px;border-radius:6px}
+  button.danger{color:var(--err);border-color:#f3d4d4}
+  button.danger:hover{background:#fef2f2}
+
+  .badges{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .badge{font-size:12px;padding:3px 9px;border-radius:999px;background:#f1f3f5;color:var(--muted);
+        border:1px solid var(--line)}
+  .badge.on{background:#e8f7ef;color:var(--ok);border-color:#c8ebd9}
+  .badge.off{background:#fdeeee;color:var(--err);border-color:#f6d5d5}
+  .badge.mode{background:var(--accent-weak);color:var(--accent);border-color:#d3e0fb}
+
+  .hint{font-size:12px;color:var(--muted);margin-top:8px}
+  .msg{margin-top:12px;padding:10px 12px;border-radius:8px;font-size:13px;display:none}
+  .msg.show{display:block}
+  .msg.ok{background:#e8f7ef;color:#0b7a3d;border:1px solid #c8ebd9}
+  .msg.err{background:#fdeeee;color:#b91c1c;border:1px solid #f6d5d5}
+
+  .result{margin-top:14px;padding:12px;border:1px dashed #c7d7f7;background:#f8fbff;
+        border-radius:8px;display:none}
+  .result.show{display:block}
+  .result .url{font-family:ui-monospace,Consolas,monospace;font-size:13px;color:var(--accent);
+        word-break:break-all;margin:6px 0 10px}
+
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:9px 8px;text-align:left;border-bottom:1px solid var(--line);font-size:13px;
+        vertical-align:middle}
+  th{color:var(--muted);font-weight:500;font-size:12px;background:#fafbfc}
+  td.code{font-family:ui-monospace,Consolas,monospace;color:var(--accent);white-space:nowrap}
+  td.url{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  td.ops{white-space:nowrap;text-align:right}
+  td.ops button{margin-left:5px}
+  .num{font-variant-numeric:tabular-nums}
+  .empty{padding:22px;text-align:center;color:var(--muted);font-size:13px}
+
+  .pager{display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:12px;
+        font-size:13px;color:var(--muted)}
+
+  .statbox{background:#fafbfc;border-top:1px solid var(--line)}
+  .statbox td{padding:12px}
+  .kpis{display:flex;gap:22px;margin-bottom:10px}
+  .kpi b{display:block;font-size:18px;font-variant-numeric:tabular-nums}
+  .kpi span{font-size:11px;color:var(--muted)}
+  .daily{font-size:12px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
+
+  footer{margin-top:26px;font-size:12px;color:var(--muted);line-height:1.9}
+  footer code{background:#eceff3;padding:1px 5px;border-radius:4px;font-size:11px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>CityShortUrl<span>高并发短链系统</span></h1>
+    <div class="spacer"></div>
+    <div class="badges" id="badges"><span class="badge">检查中…</span></div>
+  </header>
+  <div class="hint">
+    读主链路四层拦截（布隆 → Redis → 空值标记 → MySQL）｜
+    <a href="/doc.html" target="_blank">接口文档</a> ｜
+    <a href="/api/health" target="_blank">/api/health</a>
+  </div>
+
+  <!-- ============ 1. 登录 / 注册 ============ -->
+  <section class="card" id="authCard">
+    <h2><span class="num">1</span>登录 / 注册</h2>
+    <div class="row">
+      <div class="grow">
+        <label>用户名</label>
+        <input id="username" placeholder="例如 demo_user" autocomplete="username">
+      </div>
+      <div class="grow">
+        <label>密码（至少 6 位）</label>
+        <input id="password" type="password" placeholder="至少 6 位" autocomplete="current-password">
+      </div>
+      <button class="primary" id="btnLogin">登录</button>
+      <button id="btnRegister">注册并登录</button>
+    </div>
+    <div class="msg" id="authMsg"></div>
+    <div class="hint">注册后自动登录。登录态存在浏览器 localStorage，接口用 JWT 鉴权。</div>
+  </section>
+
+  <!-- ============ 2. 创建短链 ============ -->
+  <section class="card" id="createCard" style="display:none">
+    <h2><span class="num">2</span>生成短链 <span class="badge" id="whoami"></span></h2>
+    <div class="row">
+      <div class="grow">
+        <label>原始长链接</label>
+        <input id="originalUrl" placeholder="https://example.com/some/very/long/path?a=1&amp;b=2">
+      </div>
+      <div class="w120">
+        <label>有效期</label>
+        <select id="expireDays">
+          <option value="7">7 天</option>
+          <option value="30" selected>30 天</option>
+          <option value="365">1 年</option>
+          <option value="">永久</option>
+        </select>
+      </div>
+      <button class="primary" id="btnCreate">生成短链</button>
+      <button id="btnLogout">退出登录</button>
+    </div>
+    <div class="result" id="createResult">
+      <label>短链（点击「打开」会走 302 跳转，可在浏览器地址栏看到跳转过程）</label>
+      <div class="url" id="shortUrl"></div>
+      <button class="mini" id="btnCopy">复制</button>
+      <button class="mini primary" id="btnOpen">打开</button>
+    </div>
+    <div class="msg" id="createMsg"></div>
+    <div class="hint">⚠ 创建接口按 IP 限流 60 次/分钟，超出会返回真正的 HTTP 429。</div>
+  </section>
+
+  <!-- ============ 3. 我的短链 ============ -->
+  <section class="card" id="listCard" style="display:none">
+    <h2><span class="num">3</span>我的短链 <span class="badge" id="totalBadge"></span></h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:110px">短码</th>
+          <th>原始链接</th>
+          <th style="width:90px">PV / UV</th>
+          <th style="width:210px"></th>
+        </tr>
+      </thead>
+      <tbody id="listBody"></tbody>
+    </table>
+    <div class="pager">
+      <span id="pageInfo"></span>
+      <button class="mini" id="btnPrev">上一页</button>
+      <button class="mini" id="btnNext">下一页</button>
+    </div>
+    <div class="msg" id="listMsg"></div>
+  </section>
+
+  <footer>
+    <div><b>这个页面在验证什么</b></div>
+    <div>· 生成短链 → 雪花 ID + base62 → 10 位短码，本地生成无中心化发号器</div>
+    <div>· 点「打开」→ 服务端 <code>GET /{shortCode}</code> 返回 <b>302</b>，缓存未命中会回源 MySQL 并回填 Redis</div>
+    <div>· 点「统计」→ PV/UV 来自 <code>access_log</code> 表，该表由 RocketMQ 消费者<b>异步</b>写入（跳转接口不写库）</div>
+    <div>· 删除是<b>软删</b>（<code>status=2</code>）且会同时清掉 Redis 缓存，否则短链还能跳转</div>
+    <div>· 别人的短码你查不到：所有管理接口都校验归属，越权返回 <b>403</b></div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var TOKEN_KEY = 'cityshorturl_token';
+  var USER_KEY = 'cityshorturl_user';
+  var page = 1, size = 10, totalPages = 1;
+
+  function $(id) { return document.getElementById(id); }
+
+  /** 防 XSS：演示页也会展示用户输入的内容，必须转义 */
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function msg(el, text, ok) {
+    el.textContent = text;
+    el.className = 'msg show ' + (ok ? 'ok' : 'err');
+    if (ok) { setTimeout(function () { el.className = 'msg'; }, 4000); }
+  }
+  function clearMsg(el) { el.className = 'msg'; }
+
+  function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
+  function setAuth(t, u) {
+    if (t) { localStorage.setItem(TOKEN_KEY, t); localStorage.setItem(USER_KEY, u || ''); }
+    else { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); }
+    render();
+  }
+
+  /** 统一请求：自动带 token、统一处理业务码与 HTTP 状态 */
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = { 'Content-Type': 'application/json' };
+    if (token()) { headers['Authorization'] = 'Bearer ' + token(); }
+    return fetch(path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (res) {
+      // 401：token 失效 → 清掉登录态
+      if (res.status === 401) {
+        setAuth(null);
+        throw new Error('登录已过期，请重新登录');
+      }
+      // 429：限流
+      if (res.status === 429) {
+        throw new Error('触发限流（60 次/分钟/IP），请稍后再试');
+      }
+      return res.json().then(function (json) {
+        if (json.code !== 0) { throw new Error(json.message || ('业务码 ' + json.code)); }
+        return json.data;
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------- 健康状态
+  function loadHealth() {
+    fetch('/api/health').then(function (r) { return r.json(); }).then(function (j) {
+      var d = j.data || {}, f = d.features || {}, box = $('badges');
+      var parts = [];
+      parts.push(badge(d.status === 'UP' ? '服务 UP' : '服务 DEGRADED', d.status === 'UP'));
+      parts.push(badge('MySQL ' + d.db, d.db === 'UP'));
+      parts.push(badge('Redis ' + d.redis, d.redis === 'UP'));
+      if (f.bloomFilter) { parts.push(badge('布隆 ' + f.bloomFilter, f.bloomFilter === 'ON')); }
+      if (f.cacheMutex) { parts.push(badge('互斥锁 ' + f.cacheMutex, f.cacheMutex === 'ON')); }
+      if (f.rateLimit) { parts.push(badge('限流 ' + f.rateLimit, f.rateLimit === 'ON')); }
+      if (f.accessLog) { parts.push('<span class="badge mode">访问日志 ' + esc(f.accessLog) + '</span>'); }
+      box.innerHTML = parts.join('');
+    }).catch(function () {
+      $('badges').innerHTML = '<span class="badge off">后端不可达</span>';
+    });
+  }
+  function badge(text, on) {
+    return '<span class="badge ' + (on ? 'on' : 'off') + '">' + esc(text) + '</span>';
+  }
+
+  // ---------------------------------------------------------------- 登录 / 注册
+  function auth(isRegister) {
+    var u = $('username').value.trim(), p = $('password').value;
+    if (!u || !p) { msg($('authMsg'), '请填写用户名和密码', false); return; }
+    if (isRegister) {
+      // 前端预校验只是为了少一次请求；真正的校验以后端 DTO 上的注解为准
+      if (u.length < 3 || u.length > 20) { msg($('authMsg'), '用户名长度需在 3-20 之间', false); return; }
+      if (p.length < 6 || p.length > 32) { msg($('authMsg'), '密码长度需在 6-32 之间', false); return; }
+    }
+
+    var chain = Promise.resolve();
+    if (isRegister) {
+      chain = api('/api/user/register', { method: 'POST', body: { username: u, password: p } })
+        .then(function () { /* 注册成功，接着登录 */ });
+    }
+    chain.then(function () {
+      return api('/api/user/login', { method: 'POST', body: { username: u, password: p } });
+    }).then(function (d) {
+      setAuth(d.token, d.username || u);
+      $('password').value = '';
+      clearMsg($('authMsg'));
+      loadList();
+    }).catch(function (e) {
+      msg($('authMsg'), e.message, false);
+    });
+  }
+
+  // ---------------------------------------------------------------- 创建
+  function create() {
+    var url = $('originalUrl').value.trim();
+    if (!url) { msg($('createMsg'), '请填写原始链接', false); return; }
+    // 与后端 CreateShortUrlDTO 的 @Pattern("^https?://.+") 对齐：
+    // 只放开 http/https —— 如果允许 javascript: 或 data:，短链就成了 XSS 载荷的传播工具
+    if (!/^https?:\/\/.+/i.test(url)) { msg($('createMsg'), '只支持 http:// 或 https:// 开头的完整链接', false); return; }
+    if (url.length > 2048) { msg($('createMsg'), '链接不能超过 2048 字符', false); return; }
+
+    var days = $('expireDays').value;
+    var body = { originalUrl: url };
+    if (days) { body.expireDays = parseInt(days, 10); }
+
+    $('btnCreate').disabled = true;
+    api('/api/short/create', { method: 'POST', body: body }).then(function (d) {
+      $('shortUrl').textContent = d.shortUrl;
+      $('createResult').className = 'result show';
+      $('createResult').dataset.url = d.shortUrl;
+      clearMsg($('createMsg'));
+      $('originalUrl').value = '';
+      loadList();
+    }).catch(function (e) {
+      msg($('createMsg'), e.message, false);
+    }).then(function () {
+      $('btnCreate').disabled = false;
+    });
+  }
+
+  // ---------------------------------------------------------------- 列表
+  function loadList() {
+    if (!token()) { return; }
+    api('/api/short/my?current=' + page + '&size=' + size).then(function (d) {
+      totalPages = d.pages || 1;
+      $('totalBadge').textContent = '共 ' + d.total + ' 条';
+      $('pageInfo').textContent = '第 ' + d.current + ' / ' + totalPages + ' 页';
+      $('btnPrev').disabled = d.current <= 1;
+      $('btnNext').disabled = d.current >= totalPages;
+
+      var body = $('listBody');
+      if (!d.records || !d.records.length) {
+        body.innerHTML = '<tr><td colspan="4" class="empty">还没有短链，在上面生成一条试试</td></tr>';
+        return;
+      }
+      body.innerHTML = d.records.map(function (r) {
+        return '<tr data-code="' + esc(r.shortCode) + '">'
+          + '<td class="code">' + esc(r.shortCode) + '</td>'
+          + '<td class="url" title="' + esc(r.originalUrl) + '">' + esc(r.originalUrl) + '</td>'
+          + '<td class="num">' + r.pv + ' / ' + r.uv + '</td>'
+          + '<td class="ops">'
+          + '<button class="mini" data-act="open">打开</button>'
+          + '<button class="mini" data-act="stat">统计</button>'
+          + '<button class="mini danger" data-act="del">删除</button>'
+          + '</td></tr>';
+      }).join('');
+    }).catch(function (e) {
+      msg($('listMsg'), e.message, false);
+    });
+  }
+
+  function openShort(code) { window.open('/' + code, '_blank'); }
+
+  function statShort(code, tr) {
+    // 已展开则收起
+    var next = tr.nextElementSibling;
+    if (next && next.classList.contains('statbox')) { next.remove(); return; }
+    api('/api/short/stats/' + code + '?days=7').then(function (d) {
+      var daily = (d.daily || []).map(function (x) {
+        return esc(x.date) + ' PV=' + x.pv + ' UV=' + x.uv;
+      }).join('　');
+      var box = document.createElement('tr');
+      box.className = 'statbox';
+      box.innerHTML = '<td colspan="4">'
+        + '<div class="kpis">'
+        + '<div class="kpi"><b class="num">' + d.totalPv + '</b><span>总 PV</span></div>'
+        + '<div class="kpi"><b class="num">' + d.totalUv + '</b><span>总 UV（按 IP 去重）</span></div>'
+        + '<div class="kpi"><b class="num">' + (d.daily || []).length + '</b><span>有数据的日期数</span></div>'
+        + '</div>'
+        + '<div class="daily">' + (daily || '最近 7 天暂无访问记录') + '</div>'
+        + '</td>';
+      tr.parentNode.insertBefore(box, tr.nextSibling);
+    }).catch(function (e) {
+      msg($('listMsg'), e.message, false);
+    });
+  }
+
+  function delShort(code, tr) {
+    if (!window.confirm('删除短链 ' + code + ' ？\n\n（软删：DB 里保留记录，但会同时清掉 Redis 缓存，之后跳转返回 404）')) { return; }
+    api('/api/short/' + code, { method: 'DELETE' }).then(function () {
+      tr.remove();
+      msg($('listMsg'), '已删除 ' + code + '（缓存已清除）', true);
+      loadList();
+    }).catch(function (e) {
+      msg($('listMsg'), e.message, false);
+    });
+  }
+
+  // ---------------------------------------------------------------- 渲染
+  function render() {
+    var logged = !!token();
+    $('authCard').style.display = logged ? 'none' : '';
+    $('createCard').style.display = logged ? '' : 'none';
+    $('listCard').style.display = logged ? '' : 'none';
+    if (logged) { $('whoami').textContent = localStorage.getItem(USER_KEY) || '已登录'; }
+  }
+
+  // ---------------------------------------------------------------- 事件绑定
+  $('btnLogin').addEventListener('click', function () { auth(false); });
+  $('btnRegister').addEventListener('click', function () { auth(true); });
+  $('btnLogout').addEventListener('click', function () {
+    setAuth(null); page = 1; clearMsg($('authMsg')); clearMsg($('listMsg'));
+    $('createResult').className = 'result';
+  });
+  $('password').addEventListener('keydown', function (e) { if (e.key === 'Enter') { auth(false); } });
+  $('originalUrl').addEventListener('keydown', function (e) { if (e.key === 'Enter') { create(); } });
+  $('btnCreate').addEventListener('click', create);
+
+  $('btnCopy').addEventListener('click', function () {
+    var u = $('createResult').dataset.url || '';
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(u).then(function () { msg($('createMsg'), '已复制到剪贴板', true); });
+    } else {
+      msg($('createMsg'), u, true);
+    }
+  });
+  $('btnOpen').addEventListener('click', function () {
+    var u = $('createResult').dataset.url || '';
+    if (u) { window.open(u, '_blank'); }
+  });
+
+  $('listBody').addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-act]');
+    if (!btn) { return; }
+    var tr = btn.closest('tr'), code = tr.dataset.code, act = btn.dataset.act;
+    if (act === 'open') { openShort(code); }
+    else if (act === 'stat') { statShort(code, tr); }
+    else if (act === 'del') { delShort(code, tr); }
+  });
+
+  $('btnPrev').addEventListener('click', function () { if (page > 1) { page--; loadList(); } });
+  $('btnNext').addEventListener('click', function () { if (page < totalPages) { page++; loadList(); } });
+
+  // ---------------------------------------------------------------- 启动
+  loadHealth();
+  setInterval(loadHealth, 20000);
+  render();
+  if (token()) { loadList(); }
+})();
+</script>
+</body>
+</html>

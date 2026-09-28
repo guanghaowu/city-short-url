@@ -27,6 +27,19 @@ mybatis-plus:
       id-type: ASSIGN_ID
   mapper-locations: classpath:mapper/*.xml
 
+# ===== RocketMQ（Step 7：访问日志异步化）=====
+# ⚠ 必须放在**顶层**，不能塞进 spring: 下面 —— rocketmq-spring-boot-starter
+#   读的是根级的 rocketmq.* 前缀，放到 spring 下它读不到（项目 A 踩过这个坑）。
+rocketmq:
+  name-server: ${ROCKETMQ_NAME_SERVER:localhost:9876}
+  producer:
+    group: short-url-producer
+    # 访问日志是「尽力而为」的旁路数据：丢了只是少一条统计，不影响跳转。
+    # 所以超时设短（默认 3000ms），让 broker 异常时尽快把失败交给回调，
+    # 而不是让失败在客户端内部长时间挂着重试。
+    send-message-timeout: 3000
+    retry-times-when-send-failed: 1
+
 app:
   rate-limit:
     # 全局开关。压测要播种 2000 条短链时会撞上限流，用
@@ -61,6 +74,19 @@ app:
     # 未抢到锁的线程自旋等待参数
     spin-wait-ms: 50
     spin-max-times: 20
+
+  access-log:
+    # 访问日志写入模式 —— Step 7 的**对照实验开关**（三个取值）：
+    #
+    #   MQ   （默认）投递到 RocketMQ，由消费者异步落库。
+    #         请求线程只做一次 asyncSend（不阻塞等 broker ack）。
+    #   SYNC 请求线程直接 INSERT。这是 Step 7 之前的基线行为，
+    #         保留它是为了做「同流量、同并发、唯一变量是同步/异步」的对照压测。
+    #   OFF  完全不记日志。用来测出「记日志本身」的净开销下界。
+    #
+    # ⚠ 三个模式的代码路径都真实存在，不是「为了压测写个假分支」——
+    #   SYNC 在生产也是合理选择（单机、日志量小、不想引 MQ 时）。
+    mode: ${APP_ACCESS_LOG_MODE:MQ}
 
 # ===== 接口文档（Knife4j / OpenAPI3）=====
 # 访问 http://localhost:8082/doc.html

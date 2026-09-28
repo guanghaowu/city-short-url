@@ -1,12 +1,14 @@
 # Compose 规范已废弃顶层 version 字段（写了会告警），故不声明。
 #
-# 端口规划：项目 A 已占 8080/8081/3307/6379，本项目整体避开
-#   MySQL  3308 → 容器 3306
-#   Redis  6380 → 容器 6379
-#   应用   8082 → 容器 8080
+# 端口规划：项目 A 已占 8080/8081/3307/6379/9876/10909/10911，本项目整体避开
+#   MySQL        3308  → 容器 3306
+#   Redis        6380  → 容器 6379
+#   应用         8082  → 容器 8080
+#   MQ namesrv   9877  → 容器 9876
+#   MQ broker    10919/10921 → 容器 10909/10911
 #
-# 注：RocketMQ 不在本文件里 —— Step 7 接入时再决定是复用项目 A 的集群
-#     还是另起一套（避免 9876 端口冲突）。
+# RocketMQ 是**项目 B 自己的一套**（集群名 CityShortUrlCluster / broker-city），
+# 不与项目 A 共用 —— 理由见 rocketmq/broker.conf 顶部注释。
 
 services:
   # ========== MySQL ==========
@@ -48,6 +50,40 @@ services:
       timeout: 5s
       retries: 5
 
+  # ========== RocketMQ：NameServer ==========
+  # 轻量路由注册中心：broker 向它注册地址，客户端向它查地址。
+  # 无状态，挂了重启即可（broker 会重新注册）。
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.3.1
+    container_name: city-rocketmq-namesrv
+    restart: unless-stopped
+    ports:
+      - "9877:9876"
+    environment:
+      JAVA_OPT_EXT: "-Xms256m -Xmx256m -Xmn128m"
+    command: sh mqnamesrv
+
+  # ========== RocketMQ：Broker ==========
+  # 真正存消息、投递消息的角色。
+  #
+  # ⚠ 没有挂数据卷：消息落在容器文件系统里，`docker compose stop/start`
+  #   会保留，`down` + 重建则丢失。对访问日志这种「尽力而为」的旁路数据
+  #   可以接受（topic 也会被 autoCreateTopicEnable 自动重建）。
+  #   生产必须挂盘，否则 broker 重启 = 消息全丢。
+  rocketmq-broker:
+    image: apache/rocketmq:5.3.1
+    container_name: city-rocketmq-broker
+    restart: unless-stopped
+    ports:
+      - "10919:10909"
+      - "10921:10911"
+    environment:
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+      JAVA_OPT_EXT: "-Xms512m -Xmx512m -Xmn256m"
+    volumes:
+      - ./rocketmq/broker.conf:/home/rocketmq/broker.conf
+    command: sh mqbroker -n rocketmq-namesrv:9876 -c /home/rocketmq/broker.conf
+
   # ========== 应用本体 ==========
   city-url-app:
     build: .
@@ -66,11 +102,24 @@ services:
       APP_CACHE_MUTEX_ENABLED: ${APP_CACHE_MUTEX_ENABLED:-true}
       # 压测播种 2000 条短链时会撞上「60 次/分钟/IP」的限流，需要临时关掉
       APP_RATELIMIT_ENABLED: ${APP_RATELIMIT_ENABLED:-true}
+      # ===== Step 7 访问日志对照开关 =====
+      #   MQ（默认）—— 投递 RocketMQ 异步落库
+      #   SYNC      —— 请求线程直接 INSERT（Step 7 之前的基线，用于延迟对照）
+      #   OFF       —— 完全不记日志（测「记日志本身」的净开销）
+      # 用法：APP_ACCESS_LOG_MODE=SYNC docker compose up -d city-url-app
+      APP_ACCESS_LOG_MODE: ${APP_ACCESS_LOG_MODE:-MQ}
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # 只要求「已启动」而非 healthy：MQ 是**旁路**依赖，应用即使连不上 MQ
+      # 也必须能起来（访问日志 fail-open，见 AccessLogProducer）。
+      # 这里加 depends_on 只是为了演示时先把 MQ 拉起来，让首个 topic 能自动创建。
+      rocketmq-namesrv:
+        condition: service_started
+      rocketmq-broker:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
       interval: 15s

@@ -22,6 +22,9 @@
         <java.version>21</java.version>
         <mybatis-plus.version>3.5.9</mybatis-plus.version>
         <jjwt.version>0.12.5</jjwt.version>
+        <!-- 与项目 A 保持同一版本，便于两个项目互相对照（rocketmq-spring 2.x 系列
+             客户端可直连 5.x broker，见 docker-compose 的 apache/rocketmq:5.3.1） -->
+        <rocketmq.version>2.3.1</rocketmq.version>
     </properties>
 
     <dependencies>
@@ -99,6 +102,14 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
+        <!-- RocketMQ：Step 7 的访问日志异步化。
+             注意 spring-boot-starter-web 不传递依赖它，必须显式引入。 -->
+        <dependency>
+            <groupId>org.apache.rocketmq</groupId>
+            <artifactId>rocketmq-spring-boot-starter</artifactId>
+            <version>${rocketmq.version}</version>
         </dependency>
 
         <!-- Guava：只用它的 BloomFilter。

@@ -31,6 +31,10 @@ spring:
       password:
       timeout: 5000ms
 
+# 容器内连 MQ：走 compose 服务名
+rocketmq:
+  name-server: rocketmq-namesrv:9876
+
 app:
   jwt:
     secret: ${JWT_SECRET:city-short-url-dev-secret-key-change-me-2026-at-least-32-bytes}

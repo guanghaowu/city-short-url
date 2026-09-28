@@ -45,6 +45,9 @@ public class HealthController {
     @Value("${app.rate-limit.enabled:true}")
     private boolean rateLimitEnabled;
 
+    @Value("${app.access-log.mode:MQ}")
+    private String accessLogMode;
+
     @GetMapping("/api/health")
     public Result<Map<String, Object>> health() {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -83,6 +86,9 @@ public class HealthController {
         f.put("nullCache", nullTtlSeconds > 0 ? "ON" : "OFF");
         f.put("rateLimit", rateLimitEnabled ? "ON" : "OFF");
         f.put("ttlJitterSeconds", ttlJitterSeconds);
+        // Step 7：访问日志写入模式（MQ / SYNC / OFF）。
+        // 压测对照实验要读它确认「同步基线组」真的生效了。
+        f.put("accessLog", accessLogMode == null ? "MQ" : accessLogMode.trim().toUpperCase());
         return f;
     }
 

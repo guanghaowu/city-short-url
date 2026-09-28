@@ -2,6 +2,7 @@ package com.cityshorturl.aspect;
 
 import com.cityshorturl.annotation.RateLimit;
 import com.cityshorturl.common.RateLimitException;
+import com.cityshorturl.common.RequestUtils;
 import com.cityshorturl.common.UserContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -147,27 +148,6 @@ public class RateLimitAspect {
                 return "u" + userId;
             }
         }
-        return clientIp();
-    }
-
-    /**
-     * 取客户端 IP。
-     *
-     * <p><b>安全提醒（面试会问）</b>：{@code X-Forwarded-For} 是<b>请求头，可以被伪造</b>。
-     * 只有在<b>可信代理</b>之后才认它 —— 正确做法是让 Nginx 用
-     * {@code proxy_set_header X-Forwarded-For $remote_addr} <b>覆盖</b>（而不是追加）
-     * 该头，或者取「从右往左数第 N 个可信代理之后」的那个 IP。
-     * 直接信客户端传来的 XFF，攻击者换个头就绕过了限流。
-     */
-    private String clientIp() {
-        String xff = request.getHeader("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
-        }
-        String real = request.getHeader("X-Real-IP");
-        if (real != null && !real.isBlank()) {
-            return real.trim();
-        }
-        return request.getRemoteAddr();
+        return RequestUtils.clientIp(request);
     }
 }

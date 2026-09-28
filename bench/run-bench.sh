@@ -7,7 +7,11 @@
 #   bash bench/run-bench.sh main       # 只跑默认配置下的场景（S1/S2/S3/S5）
 #   bash bench/run-bench.sh nobloom    # 只跑「关布隆」对照（S4）
 #   bash bench/run-bench.sh nomutex    # 只跑「关互斥锁」对照（S6）
+#   bash bench/run-bench.sh accesslog  # Step 7：访问日志 MQ / SYNC / OFF 三组对照
 #   bash bench/run-bench.sh restore    # 恢复默认配置
+#
+# ⚠ accesslog 需要 bench/out/codes.txt 已存在（先跑一次 seed），
+#   且会重建容器 3 次（每组一次），约 6-8 分钟。
 #
 # 核心方法论：**没有对照组的性能数字不可信**。
 # 所以每个「优化」都配一个把它关掉的基线组，两组跑同样的流量、同样的并发。
@@ -133,12 +137,20 @@ restart_app() {
 
   # 自证二：当前生效的开关是什么
   info "features: bloomFilter=$(feature bloomFilter) cacheMutex=$(feature cacheMutex) " \
-       "nullCache=$(feature nullCache) rateLimit=$(feature rateLimit)"
+       "nullCache=$(feature nullCache) rateLimit=$(feature rateLimit) accessLog=$(feature accessLog)"
 }
 
 # ---------------------------------------------------------------- 跑一个用例
-declare -a ROWS=()
-declare -a CALIB=()
+declare -a ROWS=()          # Step 4（缓存三剑客）的结果行 → RESULTS.md
+declare -a CALIB=()         # Step 4 的口径一致性校验行
+declare -a ALROWS=()        # Step 7（访问日志）的结果行 → RESULTS-ACCESSLOG.md
+declare -a ALLAG=()         # Step 7 的「消费端吞吐」观察
+declare -A AL_QPS=() AL_P50=() AL_P90=() AL_P99=()   # 按模式存原始数字，供结论段动态计算
+LAST_QPS="" LAST_P50="" LAST_P90="" LAST_P99=""      # run_case 最近一次的结果（供上面取值）
+
+# run_case 把结果行塞进哪个桶：main（Step 4）/ al（Step 7）
+# 用全局变量而不是多加一个位置参数，是为了不动已有的 6 个调用点。
+ROW_BUCKET="main"
 
 run_case() {   # run_case <编号> <说明> <开关状态> -- <bench.mjs 参数...>
   local id="$1" desc="$2" flags="$3"; shift 3
@@ -169,6 +181,12 @@ run_case() {   # run_case <编号> <说明> <开关状态> -- <bench.mjs 参数.
 
   printf '  \033[32m%-22s\033[0m req=%-7s qps=%-9s p50=%-7s p90=%-7s p99=%-8s DB日志=%-8s DB_digest=%-8s err=%s bad=%s\n' \
     "$id" "$total" "$qps" "$p50" "$p90" "$p99" "$sql_log" "$sql_digest" "$err" "$bad"
+
+  if [ "$ROW_BUCKET" = "al" ]; then
+    ALROWS+=("| $id | $desc | $total | $qps | ${p50}ms | ${p90}ms | ${p99}ms | $err | $bad |")
+    LAST_QPS="$qps"; LAST_P50="$p50"; LAST_P90="$p90"; LAST_P99="$p99"
+    return 0
+  fi
 
   ROWS+=("| $id | $desc | $flags | $total | $qps | ${p50}ms | ${p90}ms | ${p99}ms | **$sql_log** | $sql_digest |")
   CALIB+=("| $id | $total | $sql_log | $sql_digest | $(awk -v a="$sql_log" -v b="$sql_digest" \
@@ -271,6 +289,181 @@ phase_restore() {
   log "恢复默认配置（布隆 ON + 互斥锁 ON）"
   restart_app "恢复默认" APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=true APP_RATELIMIT_ENABLED=true
   wait_feature bloomFilter ON || die "布隆没有回到 ON"
+}
+
+# ============================================================================
+# Step 7：访问日志写入方式的对照实验（MQ 异步 / SYNC 同步 / OFF 不记）
+# ============================================================================
+
+al_rows() { mysql_q "SELECT COUNT(*) FROM access_log;" | tr -d '[:space:]'; }
+
+# 百分比变化（a 相对 b）。b 为 0 时输出 "-"。
+pct() { awk -v a="$1" -v b="$2" 'BEGIN{ if (b+0 > 0) printf "%+.0f%%", (a-b)*100.0/b; else print "-" }'; }
+
+phase_accesslog() {
+  log "Step 7 对照：访问日志 MQ / SYNC / OFF 三组，同流量、同并发、同一批短码"
+  [ -s "$CODES" ] || die "缺少 $CODES —— 请先跑：bash bench/run-bench.sh seed"
+
+  ROW_BUCKET="al"
+  local mode
+
+  for mode in MQ SYNC OFF; do
+    log "S7-$mode：把访问日志切成 $mode 模式"
+    restart_app "访问日志 $mode" \
+      APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=true APP_RATELIMIT_ENABLED=true \
+      APP_ACCESS_LOG_MODE="$mode"
+    wait_feature bloomFilter ON || die "布隆没有就绪"
+    # ⚠ 这是本次对照能不能成立的关键：必须读到 features.accessLog == 期望值，
+    #    否则可能是在「以为切了其实没切」的状态下跑完一整组，数字全废。
+    wait_feature accessLog "$mode" || die "accessLog 没切到 $mode，对照不成立"
+    warn "⚠ 对照组成立：accessLog=$mode"
+
+    # 三组统一走**缓存命中**路径：先清缓存，再预热一轮把缓存填满。
+    # 这样延迟差异只可能来自「记日志」这一件事，不掺 DB 回源。
+    clear_cache
+    "$NODE_BIN" "$HERE/bench.mjs" --mode hit --codes "$CODES" --rounds 1 \
+      --concurrency 50 >/dev/null 2>>"$OUT/bench.stderr"
+
+    local a_before a_imm a_after
+    a_before=$(al_rows)
+    run_case "S7-$mode" "缓存全命中，唯一变量=访问日志写入方式（$mode）" \
+      "accessLog=$mode" -- \
+      --mode hit --codes "$CODES" --rounds 1 --concurrency 50
+    a_imm=$(al_rows)
+
+    AL_QPS[$mode]="$LAST_QPS"; AL_P50[$mode]="$LAST_P50"
+    AL_P90[$mode]="$LAST_P90"; AL_P99[$mode]="$LAST_P99"
+
+    if [ "$mode" = "MQ" ]; then
+      # 异步滞后的直接观察：压测跑完时还没落完的条数 vs 再等 5s 后累计的条数。
+      # 差值 = 请求早已返回、消费者仍在补写的条数。
+      sleep 5
+      a_after=$(al_rows)
+      ALLAG+=("| MQ | $((a_imm - a_before)) | $((a_after - a_before)) | $((a_after - a_imm)) |")
+      info "异步滞后观察：跑完瞬间已落库 $((a_imm - a_before)) 条，5s 后 $((a_after - a_before)) 条，" \
+           "其中 $((a_after - a_imm)) 条是请求返回之后才补上的"
+    fi
+  done
+
+  ROW_BUCKET="main"
+
+  # ⚠ 必须把容器恢复成默认模式：压测跑完停在 OFF 模式的话，
+  #   后面所有「访问日志」相关的验收都会莫名其妙地失败。
+  log "恢复访问日志默认模式（MQ）"
+  restart_app "恢复访问日志默认模式" \
+    APP_BLOOM_ENABLED=true APP_CACHE_MUTEX_ENABLED=true APP_RATELIMIT_ENABLED=true
+  wait_feature accessLog MQ || warn "⚠ accessLog 没恢复到 MQ，请手动确认"
+}
+
+write_accesslog_report() {
+  [ "${#ALROWS[@]}" -eq 0 ] && return 0
+  local REPORT_AL="$HERE/RESULTS-ACCESSLOG.md"
+  local cpu mem os
+  cpu=$(docker exec "$APP_CTN" sh -c 'nproc' 2>/dev/null || echo '?')
+  mem=$(docker exec "$APP_CTN" sh -c "free -m 2>/dev/null | awk '/Mem:/{print \$2\" MB\"}'" 2>/dev/null || echo '?')
+  os=$(docker exec "$APP_CTN" sh -c 'cat /etc/os-release 2>/dev/null | head -1' 2>/dev/null || echo '?')
+
+  cat > "$REPORT_AL" <<EOF
+# 项目 B · Step 7 压测报告（访问日志：MQ 异步 vs SYNC 同步 vs OFF 不记）
+
+> 由 \`bash bench/run-bench.sh accesslog\` 自动生成于 $(date '+%Y-%m-%d %H:%M:%S')
+> 原始数据：\`bench/out/raw.jsonl\`
+
+## 一、实验设计
+
+**唯一变量是「访问日志的写入方式」**，其余全部相同：同一批短码、同样的请求数、
+同样的并发、同一台机器、同一份代码（三个分支都在 \`AccessLogService.record()\` 里）。
+
+| 模式 | 请求线程做什么 | 说明 |
+|---|---|---|
+| \`MQ\` | \`asyncSend\` 一条消息后立即返回 | 不等 broker ack；INSERT 由消费者线程做 |
+| \`SYNC\` | 等 MySQL 写完 INSERT 才返回 | Step 7 之前的基线行为 |
+| \`OFF\` | 什么都不做 | 净开销下界，用来判断「记日志本身」有多贵 |
+
+三组都跑在**缓存全命中**路径上（每组先清缓存、再预热一轮），
+所以延迟差异只可能来自记日志这一件事，不掺 DB 回源。
+
+**开关自证**：每组开跑前都读 \`/api/health\` 的 \`features.accessLog\`，
+读到期望值才继续 —— 避免「以为切了其实没切」的假对照。
+
+## 二、结果
+
+| 用例 | 说明 | 请求数 | QPS | p50 | p90 | p99 | err | bad |
+|---|---|---|---|---|---|---|---|---|
+$(printf '%s\n' "${ALROWS[@]}")
+
+## 三、消费端吞吐观察
+
+压测结束（脚本收尾统计完成后约 1~2 秒）立刻查一次 \`access_log\` 行数，再等 5 秒查一次：
+
+| 模式 | 跑完时已落库 | 5s 后累计 | 差值（请求返回后才补上的） |
+|---|---|---|---|
+$(printf '%s\n' "${ALLAG[@]}")
+
+**怎么读这张表**：
+- 差值 = 0 说明消费端**完全跟得上** —— 20 个消费线程消化 2000 条消息绰绰有余，
+  日志在请求返回后极短时间内就全部落库了。这是**好消息**，不是「异步没生效」。
+- 异步性本身由 \`scripts/verify-step7.sh\` 的第 2 项判据证明：**落库日志出现在
+  \`ConsumeMessageThread_*\` 线程上、请求线程 0 条**（用线程名，不靠推断）。
+- 滞后只会在**消费能力被打满**时出现，那时的表现是压测结束后 \`access_log\` 行数继续增长。
+
+## 四、结论与局限
+
+### 4.1 本组结论
+
+| 对比 | QPS | p50 | p99 |
+|---|---|---|---|
+| SYNC → MQ | $(printf '%s' "${AL_QPS[SYNC]}") → $(printf '%s' "${AL_QPS[MQ]}")（**$(pct "${AL_QPS[MQ]}" "${AL_QPS[SYNC]}")**） | $(printf '%s' "${AL_P50[SYNC]}")ms → $(printf '%s' "${AL_P50[MQ]}")ms（**$(pct "${AL_P50[MQ]}" "${AL_P50[SYNC]}")**） | $(printf '%s' "${AL_P99[SYNC]}")ms → $(printf '%s' "${AL_P99[MQ]}")ms（$(pct "${AL_P99[MQ]}" "${AL_P99[SYNC]}")） |
+| OFF（下界） | $(printf '%s' "${AL_QPS[OFF]}") | $(printf '%s' "${AL_P50[OFF]}")ms | $(printf '%s' "${AL_P99[OFF]}")ms |
+
+**MQ 模式把「落库」从请求线程上摘掉了**：跳转接口不再等 MySQL 写完 INSERT，
+延迟和吞吐都向「完全不记日志」的下界靠拢。
+
+> ⚠ **单轮数据不能直接下结论。** 同一套脚本连跑三轮的实测波动：
+>
+> | 指标 | run1 | run2 | run3 | 结论 |
+> |---|---|---|---|---|
+> | SYNC→MQ QPS | +77% | +52% | +123% | 方向稳定（3/3 次 MQ 更优），**幅度不稳** |
+> | SYNC→MQ p50 | −61% | −53% | −76% | 方向稳定（3/3 次 MQ 更优），**幅度不稳** |
+> | SYNC→MQ p99 | −21% | +3% | +63% | ❌ **方向都不一致，不能作依据** |
+>
+> 甚至出现过 **MQ 的 p50（17.63ms）低于 OFF（24.25ms）** 的异常值 ——
+> 记日志比不记还快在物理上说不通，只能说明本环境（Docker Desktop on Windows）
+> 的绝对数字噪声很大。
+>
+> **能站住的写法**：QPS 提升 **50% 以上**、p50 降低 **50% 以上**（三轮方向一致）；
+> **p99 不写**。三轮完整对照见 \`docs/项目B-压测报告.md\` 第 7.2 节。
+
+### 4.2 🔴 必须说清楚的四个局限（面试被追问要主动交代）
+
+1. **异步省的不是 DB 写入量，而是请求线程的等待。**
+   DB 上的 INSERT 条数在 MQ 和 SYNC 下**完全一样**（各 2000 条），
+   只是执行者从 \`http-nio-*\` 换成了 \`ConsumeMessageThread_*\`。
+   **别把收益说成「DB 压力下降」，那是错的。** 正确的说法是
+   「跳转接口的延迟分布不再包含落库耗时」。
+
+2. **MQ 模式的 p90 反而比 OFF 高（110ms vs 35ms）—— 这是测量环境的产物，不是设计缺陷。**
+   原因：消费线程在**压测窗口内**并发执行 2000 条 INSERT，
+   而它和请求线程跑在**同一个容器**里，会争抢三样东西：
+   ① Druid 连接池（\`max-active=20\`）；② CPU；③ **\`System.out\`（\`PrintStream\` 的方法是 synchronized 的）**
+   —— 请求线程打「短链跳转」INFO 日志、消费线程打 2000 行 \`Preparing:\` SQL 日志，
+   全都排在同一个锁上。
+   **生产环境里消费者应该是独立的服务/实例**，这条争抢就不存在了。
+   ⚠ 这是一条**推测**（未做隔离实验验证），报告里按推测写。
+
+3. **访问日志是「尽力而为」的数据。** broker 挂掉、消息反复失败进死信队列，都会丢日志
+   （跳转本身不受影响，已验证）。这是刻意选的取舍：日志不值得为它牺牲可用性。
+
+4. **RocketMQ 是 at-least-once**，消费成功但 ack 丢失时消息会重投，
+   于是 \`access_log\` 可能出现重复行，PV 略微偏大。本项目**刻意不做去重**。
+
+> 环境：应用容器 \`$APP_CTN\`（${cpu} vCPU / ${mem}）、$os
+> ⚠ 与其他压测同一前提：\`mybatis-plus\` 的 \`log-impl=StdOutImpl\` 是开着的，
+> 每条 SQL 都同步写 stdout（且 \`System.out\` 是全局同步点），所以 QPS 偏低、延迟偏高。
+> 作为**组间相对比较**仍然成立，但绝对数字不能当生产容量。
+
+EOF
+  info "Step 7 报告已写入 $REPORT_AL"
 }
 
 # ---------------------------------------------------------------- 报告
@@ -382,14 +575,18 @@ for p in $PHASES; do
     main)    phase_main ;;
     nobloom) phase_nobloom ;;
     nomutex) phase_nomutex "" ;;
+    accesslog) phase_accesslog ;;
     restore) phase_restore ;;
     report)  write_report ;;
-    *) die "未知 phase: $p（可选 all|build|seed|main|nobloom|nomutex|restore|report）" ;;
+    *) die "未知 phase: $p（可选 all|build|seed|main|nobloom|nomutex|accesslog|restore|report）" ;;
   esac
 done
 
-# 单独跑某个 phase 时也顺手出报告
+# 单独跑某个 phase 时也顺手出报告。
+# ⚠ accesslog 出的是 RESULTS-ACCESSLOG.md（Step 7），
+#   其余 phase 出 RESULTS.md（Step 4）—— 两者互不覆盖。
 case "$PHASES" in
   all|*report*) : ;;
+  *accesslog*) write_accesslog_report ;;
   *) write_report ;;
 esac

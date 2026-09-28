@@ -94,6 +94,14 @@
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
 
+        <!-- Guava：只用它的 BloomFilter。
+             选 Guava 本地布隆而非 RedisBloom 的理由与代价见 BloomFilterService 类注释。 -->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>33.2.1-jre</version>
+        </dependency>
+
         <!-- 接口文档：Knife4j（访问 /doc.html） -->
         <dependency>
             <groupId>com.github.xiaoymin</groupId>

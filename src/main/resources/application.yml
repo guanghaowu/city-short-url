@@ -27,6 +27,14 @@ mybatis-plus:
       id-type: ASSIGN_ID
   mapper-locations: classpath:mapper/*.xml
 
+app:
+  bloom:
+    # 布隆过滤器的预估容量与误判率。
+    # 容量设小了会让位图提前「饱和」，误判率急剧上升 —— 布隆一旦创建就无法扩容，
+    # 所以宁可往大了设（10 万元素 + 1% 误判率约占 120 KB 内存，很便宜）。
+    expected-insertions: 100000
+    fpp: 0.01
+
 # ===== 接口文档（Knife4j / OpenAPI3）=====
 # 访问 http://localhost:8082/doc.html
 knife4j:
